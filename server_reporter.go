@@ -4,8 +4,10 @@
 package grpc_prometheus
 
 import (
+	"context"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc/codes"
 )
 
@@ -15,9 +17,15 @@ type serverReporter struct {
 	serviceName string
 	methodName  string
 	startTime   time.Time
+	exemplarExtractor func(context.Context) prometheus.Labels
 }
 
-func newServerReporter(m *ServerMetrics, rpcType grpcType, fullMethod string) *serverReporter {
+func newServerReporter(
+	m *ServerMetrics,
+	rpcType grpcType,
+	fullMethod string,
+	exemplarExtractor func(context.Context) prometheus.Labels,
+) *serverReporter {
 	r := &serverReporter{
 		metrics: m,
 		rpcType: rpcType,
@@ -27,6 +35,7 @@ func newServerReporter(m *ServerMetrics, rpcType grpcType, fullMethod string) *s
 	}
 	r.serviceName, r.methodName = splitMethodName(fullMethod)
 	r.metrics.serverStartedCounter.WithLabelValues(string(r.rpcType), r.serviceName, r.methodName).Inc()
+	r.exemplarExtractor = exemplarExtractor
 	return r
 }
 
@@ -38,9 +47,14 @@ func (r *serverReporter) SentMessage() {
 	r.metrics.serverStreamMsgSent.WithLabelValues(string(r.rpcType), r.serviceName, r.methodName).Inc()
 }
 
-func (r *serverReporter) Handled(code codes.Code) {
+func (r *serverReporter) Handled(code codes.Code, ctx context.Context) {
 	r.metrics.serverHandledCounter.WithLabelValues(string(r.rpcType), r.serviceName, r.methodName, code.String()).Inc()
 	if r.metrics.serverHandledHistogramEnabled {
-		r.metrics.serverHandledHistogram.WithLabelValues(string(r.rpcType), r.serviceName, r.methodName).Observe(time.Since(r.startTime).Seconds())
+		h := r.metrics.serverHandledHistogram.WithLabelValues(string(r.rpcType), r.serviceName, r.methodName)
+		if r.exemplarExtractor == nil {
+			h.Observe(time.Since(r.startTime).Seconds())
+		} else {
+			h.(prometheus.ExemplarObserver).ObserveWithExemplar(time.Since(r.startTime).Seconds(), r.exemplarExtractor(ctx))
+		}
 	}
 }

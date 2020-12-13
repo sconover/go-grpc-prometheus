@@ -4,6 +4,7 @@
 package grpc_prometheus
 
 import (
+	"context"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -11,14 +12,20 @@ import (
 )
 
 type clientReporter struct {
-	metrics     *ClientMetrics
-	rpcType     grpcType
-	serviceName string
-	methodName  string
-	startTime   time.Time
+	metrics           *ClientMetrics
+	rpcType           grpcType
+	serviceName       string
+	methodName        string
+	startTime         time.Time
+	exemplarExtractor func(context.Context) prometheus.Labels
 }
 
-func newClientReporter(m *ClientMetrics, rpcType grpcType, fullMethod string) *clientReporter {
+func newClientReporter(
+	m *ClientMetrics,
+	rpcType grpcType,
+	fullMethod string,
+	exemplarExtractor func(context.Context) prometheus.Labels,
+) *clientReporter {
 	r := &clientReporter{
 		metrics: m,
 		rpcType: rpcType,
@@ -28,6 +35,7 @@ func newClientReporter(m *ClientMetrics, rpcType grpcType, fullMethod string) *c
 	}
 	r.serviceName, r.methodName = splitMethodName(fullMethod)
 	r.metrics.clientStartedCounter.WithLabelValues(string(r.rpcType), r.serviceName, r.methodName).Inc()
+	r.exemplarExtractor = exemplarExtractor
 	return r
 }
 
@@ -71,9 +79,14 @@ func (r *clientReporter) SentMessage() {
 	r.metrics.clientStreamMsgSent.WithLabelValues(string(r.rpcType), r.serviceName, r.methodName).Inc()
 }
 
-func (r *clientReporter) Handled(code codes.Code) {
+func (r *clientReporter) Handled(code codes.Code, ctx context.Context) {
 	r.metrics.clientHandledCounter.WithLabelValues(string(r.rpcType), r.serviceName, r.methodName, code.String()).Inc()
 	if r.metrics.clientHandledHistogramEnabled {
-		r.metrics.clientHandledHistogram.WithLabelValues(string(r.rpcType), r.serviceName, r.methodName).Observe(time.Since(r.startTime).Seconds())
+		h := r.metrics.clientHandledHistogram.WithLabelValues(string(r.rpcType), r.serviceName, r.methodName)
+		if r.exemplarExtractor == nil {
+			h.Observe(time.Since(r.startTime).Seconds())
+		} else {
+			h.(prometheus.ExemplarObserver).ObserveWithExemplar(time.Since(r.startTime).Seconds(), r.exemplarExtractor(ctx))
+		}
 	}
 }

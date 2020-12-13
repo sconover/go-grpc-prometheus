@@ -175,15 +175,20 @@ func (m *ClientMetrics) EnableClientStreamSendTimeHistogram(opts ...HistogramOpt
 
 // UnaryClientInterceptor is a gRPC client-side interceptor that provides Prometheus monitoring for Unary RPCs.
 func (m *ClientMetrics) UnaryClientInterceptor() func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+	return m.UnaryClientInterceptorWithExemplarExtractor(nil)
+}
+
+// UnaryClientInterceptor is a gRPC client-side interceptor that provides Prometheus monitoring for Unary RPCs.
+func (m *ClientMetrics) UnaryClientInterceptorWithExemplarExtractor(exemplarExtractor func(context.Context) prom.Labels) func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-		monitor := newClientReporter(m, Unary, method)
+		monitor := newClientReporter(m, Unary, method, exemplarExtractor)
 		monitor.SentMessage()
 		err := invoker(ctx, method, req, reply, cc, opts...)
 		if err == nil {
 			monitor.ReceivedMessage()
 		}
 		st, _ := status.FromError(err)
-		monitor.Handled(st.Code())
+		monitor.Handled(st.Code(), ctx)
 		return err
 	}
 }
@@ -191,11 +196,11 @@ func (m *ClientMetrics) UnaryClientInterceptor() func(ctx context.Context, metho
 // StreamClientInterceptor is a gRPC client-side interceptor that provides Prometheus monitoring for Streaming RPCs.
 func (m *ClientMetrics) StreamClientInterceptor() func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
 	return func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
-		monitor := newClientReporter(m, clientStreamType(desc), method)
+		monitor := newClientReporter(m, clientStreamType(desc), method, nil) //TODO(steve)
 		clientStream, err := streamer(ctx, desc, cc, method, opts...)
 		if err != nil {
 			st, _ := status.FromError(err)
-			monitor.Handled(st.Code())
+			monitor.Handled(st.Code(), nil) //TODO(steve)
 			return nil, err
 		}
 		return &monitoredClientStream{clientStream, monitor}, nil
@@ -235,10 +240,10 @@ func (s *monitoredClientStream) RecvMsg(m interface{}) error {
 	if err == nil {
 		s.monitor.ReceivedMessage()
 	} else if err == io.EOF {
-		s.monitor.Handled(codes.OK)
+		s.monitor.Handled(codes.OK, s.Context())
 	} else {
 		st, _ := status.FromError(err)
-		s.monitor.Handled(st.Code())
+		s.monitor.Handled(st.Code(), s.Context())
 	}
 	return err
 }

@@ -102,12 +102,17 @@ func (m *ServerMetrics) Collect(ch chan<- prom.Metric) {
 
 // UnaryServerInterceptor is a gRPC server-side interceptor that provides Prometheus monitoring for Unary RPCs.
 func (m *ServerMetrics) UnaryServerInterceptor() func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	return m.UnaryServerInterceptorWithExemplarExtractor(nil)
+}
+
+// UnaryServerInterceptor is a gRPC server-side interceptor that provides Prometheus monitoring for Unary RPCs.
+func (m *ServerMetrics) UnaryServerInterceptorWithExemplarExtractor(exemplarExtractor func(context.Context) prom.Labels) func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-		monitor := newServerReporter(m, Unary, info.FullMethod)
+		monitor := newServerReporter(m, Unary, info.FullMethod, exemplarExtractor)
 		monitor.ReceivedMessage()
 		resp, err := handler(ctx, req)
 		st, _ := grpcstatus.FromError(err)
-		monitor.Handled(st.Code())
+		monitor.Handled(st.Code(), ctx)
 		if err == nil {
 			monitor.SentMessage()
 		}
@@ -118,10 +123,10 @@ func (m *ServerMetrics) UnaryServerInterceptor() func(ctx context.Context, req i
 // StreamServerInterceptor is a gRPC server-side interceptor that provides Prometheus monitoring for Streaming RPCs.
 func (m *ServerMetrics) StreamServerInterceptor() func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-		monitor := newServerReporter(m, streamRPCType(info), info.FullMethod)
+		monitor := newServerReporter(m, streamRPCType(info), info.FullMethod, nil) //TODO(steve)
 		err := handler(srv, &monitoredServerStream{ss, monitor})
 		st, _ := grpcstatus.FromError(err)
-		monitor.Handled(st.Code())
+		monitor.Handled(st.Code(), nil)
 		return err
 	}
 }
