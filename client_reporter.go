@@ -80,10 +80,23 @@ func (r *clientReporter) SentMessage() {
 }
 
 func (r *clientReporter) Handled(code codes.Code, ctx context.Context) {
-	r.metrics.clientHandledCounter.WithLabelValues(string(r.rpcType), r.serviceName, r.methodName, code.String()).Inc()
+	var exemplarLabels prometheus.Labels
+	if r.exemplarExtractor != nil {
+		exemplarLabels = r.exemplarExtractor(ctx)
+	}
+
+	m := r.metrics.clientHandledCounter.WithLabelValues(string(r.rpcType), r.serviceName, r.methodName, code.String())
+	exemplarAdder, isExemplarAdder := m.(prometheus.ExemplarAdder)
+
+	if isExemplarAdder && exemplarLabels != nil {
+		exemplarAdder.AddWithExemplar(1, exemplarLabels)
+	} else {
+		m.Inc()
+	}
+
 	if r.metrics.clientHandledHistogramEnabled {
 		h := r.metrics.clientHandledHistogram.WithLabelValues(string(r.rpcType), r.serviceName, r.methodName)
-		if r.exemplarExtractor == nil {
+		if exemplarLabels == nil {
 			h.Observe(time.Since(r.startTime).Seconds())
 		} else {
 			h.(prometheus.ExemplarObserver).ObserveWithExemplar(time.Since(r.startTime).Seconds(), r.exemplarExtractor(ctx))
